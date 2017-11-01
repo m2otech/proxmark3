@@ -16,8 +16,17 @@
 
 #define PROXPROMPT "proxmark3> "
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void SendCommand(UsbCommand *c);
-const char const *get_my_executable_path(void);
-const char const *get_my_executable_directory(void);
+const char *get_my_executable_path(void);
+const char *get_my_executable_directory(void);
+void main_loop(char *script_cmds_file, char *script_cmd, bool usb_present);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

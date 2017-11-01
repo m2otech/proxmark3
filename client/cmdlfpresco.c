@@ -5,6 +5,7 @@
 // the license.
 //-----------------------------------------------------------------------------
 // Low frequency Presco tag commands
+// ASK/Manchester, rf/32, 128 bits (complete)
 //-----------------------------------------------------------------------------
 #include <string.h>
 #include <inttypes.h>
@@ -67,8 +68,8 @@ int GetWiegandFromPresco(const char *Cmd, uint32_t *sitecode, uint32_t *usercode
 				*fullcode = param_get32ex(Cmd, cmdp+1, 0, 10);
 				cmdp+=2;
 				break;
-			case 'P':
-			case 'p':
+			case 'D':
+			case 'd':
 				//param get string int param_getstr(const char *line, int paramnum, char * str)
 				stringlen = param_getstr(Cmd, cmdp+1, id);
 				if (stringlen < 2) return -1;
@@ -90,7 +91,7 @@ int GetWiegandFromPresco(const char *Cmd, uint32_t *sitecode, uint32_t *usercode
 	if(cmdp == 0) errors = 1;
 
 	//Validations
-	if(errors) return -1;
+	if(errors || (stringlen == 0 && !hex) ) return -1;
 
 	if (!hex) {
 		for (int index =0; index < strlen(id); ++index) {
@@ -129,7 +130,7 @@ int CmdPrescoDemod(const char *Cmd) {
 		return 0;
 	}
 	size_t size = DemodBufferLen;
-	//call lfdemod.c demod for Viking
+	//call lfdemod.c demod for presco
 	int ans = PrescoDemod(DemodBuffer, &size);
 	if (ans < 0) {
 		if (g_debugMode) PrintAndLog("Error Presco_Demod %d", ans);
@@ -143,8 +144,9 @@ int CmdPrescoDemod(const char *Cmd) {
 	uint32_t cardid = raw4;
 	PrintAndLog("Presco Tag Found: Card ID %08X", cardid);
 	PrintAndLog("Raw: %08X%08X%08X%08X", raw1,raw2,raw3,raw4);
-	setDemodBuf(DemodBuffer+ans, 128, 0);
-	
+	setDemodBuf(DemodBuffer, 128, ans);
+	setClockGrid(g_DemodClock, g_DemodStartIdx + (ans*g_DemodClock));
+
 	uint32_t sitecode = 0, usercode = 0, fullcode = 0;
 	bool Q5=false;
 	char cmd[12] = {0};
@@ -160,9 +162,7 @@ int CmdPrescoRead(const char *Cmd) {
 	// Presco Number: 123456789 --> Sitecode 30 | usercode 8665
 
 	// read lf silently
-	CmdLFRead("s");
-	// get samples silently
-	getSamples("30000",false);
+	lf_read(true, 10000);
 	// demod and output Presco ID	
 	return CmdPrescoDemod(Cmd);
 }

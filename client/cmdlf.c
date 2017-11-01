@@ -12,6 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include "proxmark3.h"
 #include "cmdlf.h"
 #include "lfdemod.h"     // for psk2TOpsk1
@@ -43,6 +45,7 @@
 #include "cmdlfjablotron.h" //for jablotron menu
 #include "cmdlfnoralsy.h"// for noralsy menu
 #include "cmdlfsecurakey.h"//for securakey menu
+#include "cmdlfpac.h"    // for pac menu
 
 bool g_lf_threshold_set = false;
 static int CmdHelp(const char *Cmd);
@@ -211,7 +214,7 @@ int usage_lf_read(void)
 	PrintAndLog("Options:        ");
 	PrintAndLog("       h            This help");
 	PrintAndLog("       s            silent run no printout");
-	PrintAndLog("This function takes no arguments. ");
+	PrintAndLog("       [# samples]  # samples to collect (optional)");	
 	PrintAndLog("Use 'lf config' to set parameters.");
 	return 0;
 }
@@ -331,29 +334,42 @@ int CmdLFSetConfig(const char *Cmd)
 	return 0;
 }
 
+bool lf_read(bool silent, uint32_t samples) {
+	if (offline) return false;
+	UsbCommand c = {CMD_ACQUIRE_RAW_ADC_SAMPLES_125K, {silent,samples,0}};
+	clearCommandBuffer();
+	//And ship it to device
+	SendCommand(&c);
+
+	UsbCommand resp;
+	if (g_lf_threshold_set) {
+		WaitForResponse(CMD_ACK,&resp);
+	} else {
+		if ( !WaitForResponseTimeout(CMD_ACK,&resp,2500) ) {
+			PrintAndLog("command execution time out");
+			return false;
+		}
+	}
+	// resp.arg[0] is bits read not bytes read.
+	getSamples(resp.arg[0]/8, silent);
+
+	return true;
+}
+
 int CmdLFRead(const char *Cmd)
 {
-	if (offline) return 0;
 	uint8_t cmdp = 0;
-	bool arg1 = false;
+	bool silent = false;
 	if (param_getchar(Cmd, cmdp) == 'h')
 	{
 		return usage_lf_read();
 	}
-	if (param_getchar(Cmd, cmdp) == 's') arg1 = true; //suppress print
-	//And ship it to device
-	UsbCommand c = {CMD_ACQUIRE_RAW_ADC_SAMPLES_125K, {arg1,0,0}};
-	clearCommandBuffer();
-	SendCommand(&c);
-	if (g_lf_threshold_set) {
-		WaitForResponse(CMD_ACK,NULL);
-	} else {
-		if ( !WaitForResponseTimeout(CMD_ACK,NULL,2500) ) {
-			PrintAndLog("command execution time out");
-			return 1;
-		}
+	if (param_getchar(Cmd, cmdp) == 's') {
+		silent = true; //suppress print
+		cmdp++;
 	}
-	return 0;
+	uint32_t samples = param_get32ex(Cmd, cmdp, 0, 10);
+	return lf_read(silent, samples);
 }
 
 int CmdLFSnoop(const char *Cmd)
@@ -368,6 +384,8 @@ int CmdLFSnoop(const char *Cmd)
 	clearCommandBuffer();
 	SendCommand(&c);
 	WaitForResponse(CMD_ACK,NULL);
+	getSamples(0, true);
+
 	return 0;
 }
 
@@ -392,14 +410,13 @@ int CmdLFSim(const char *Cmd)
 
 	sscanf(Cmd, "%i", &gap);
 
-	// convert to bitstream if necessary 
-
+	// convert to bitstream if necessary
 	ChkBitstream(Cmd);
 
 	//can send only 512 bits at a time (1 byte sent per bit...)
 	printf("Sending [%d bytes]", GraphTraceLen);
 	for (i = 0; i < GraphTraceLen; i += USB_CMD_DATA_SIZE) {
-		UsbCommand c={CMD_DOWNLOADED_SIM_SAMPLES_125K, {i, 0, 0}};
+		UsbCommand c = {CMD_DOWNLOADED_SIM_SAMPLES_125K, {i, 0, 0}};
 
 		for (j = 0; j < USB_CMD_DATA_SIZE; j++) {
 			c.d.asBytes[j] = GraphBuffer[i+j];
@@ -532,10 +549,10 @@ int CmdLFfskSim(const char *Cmd)
 	{
 		return usage_lf_simfsk();
 	}
-
+	int firstClockEdge = 0;
 	if (dataLen == 0){ //using DemodBuffer 
 		if (clk==0 || fcHigh==0 || fcLow==0){ //manual settings must set them all
-			uint8_t ans = fskClocks(&fcHigh, &fcLow, &clk, 0);
+			uint8_t ans = fskClocks(&fcHigh, &fcLow, &clk, 0, &firstClockEdge);
 			if (ans==0){
 				if (!fcHigh) fcHigh=10;
 				if (!fcLow) fcLow=8;
@@ -861,18 +878,28 @@ int CmdVchDemod(const char *Cmd)
 int CheckChipType(char cmdp) {
 	uint32_t wordData = 0;
 
+	if (offline || cmdp == '1') return 0;
+
+	save_restoreGB(GRAPH_SAVE);
+	save_restoreDB(GRAPH_SAVE);
 	//check for em4x05/em4x69 chips first
-	save_restoreGB(1);
-	if ((!offline && (cmdp != '1')) && EM4x05Block0Test(&wordData)) {
+	if (EM4x05Block0Test(&wordData)) {
 		PrintAndLog("\nValid EM4x05/EM4x69 Chip Found\nTry lf em 4x05... commands\n");
-		save_restoreGB(0);
+		save_restoreGB(GRAPH_RESTORE);
+		save_restoreDB(GRAPH_RESTORE);
 		return 1;
 	}
 
-	//TODO check for t55xx chip...
-
-	save_restoreGB(0);
-	return 1;
+	//check for t55xx chip...
+	if (tryDetectP1(true)) {
+		PrintAndLog("\nValid T55xx Chip Found\nTry lf t55xx ... commands\n");
+		save_restoreGB(GRAPH_RESTORE);
+		save_restoreDB(GRAPH_RESTORE);
+		return 1;		
+	}
+	save_restoreGB(GRAPH_RESTORE);
+	save_restoreDB(GRAPH_RESTORE);
+	return 0;
 }
 
 //by marshmellow
@@ -896,9 +923,8 @@ int CmdLFfind(const char *Cmd)
 		return 0;
 	}
 
-	if (!offline && (cmdp != '1')){
-		CmdLFRead("s");
-		getSamples("30000",false);
+	if (!offline && (cmdp != '1')) {
+		lf_read(true, 30000);
 	} else if (GraphTraceLen < minLength) {
 		PrintAndLog("Data in Graphbuffer was too small.");
 		return 0;
@@ -924,13 +950,15 @@ int CmdLFfind(const char *Cmd)
 				return 1;
 			}
 			ans=CmdCOTAGRead("");
-			if (ans>0){
+			if (ans>0) {
 				PrintAndLog("\nValid COTAG ID Found!");
 				return 1;
 			}
 		}
 		return 0;
 	}
+
+	// TODO test for modulation then only test formats that use that modulation
 
 	ans=CmdFSKdemodIO("");
 	if (ans>0) {
@@ -980,13 +1008,13 @@ int CmdLFfind(const char *Cmd)
 		return CheckChipType(cmdp);
 	}
 
-	ans=CmdFdxDemod("");
+	ans=CmdFdxDemod(""); //biphase
 	if (ans>0) {
 		PrintAndLog("\nValid FDX-B ID Found!");
 		return CheckChipType(cmdp);
 	}
 
-	ans=EM4x50Read("", false);
+	ans=EM4x50Read("", false); //ask
 	if (ans>0) {
 		PrintAndLog("\nValid EM4x50 ID Found!");
 		return 1;
@@ -1016,7 +1044,7 @@ int CmdLFfind(const char *Cmd)
 		return CheckChipType(cmdp);
 	}
 
-	ans=CmdIndalaDecode("");
+	ans=CmdIndalaDecode(""); //psk
 	if (ans>0) {
 		PrintAndLog("\nValid Indala ID Found!");
 		return CheckChipType(cmdp);
@@ -1028,19 +1056,25 @@ int CmdLFfind(const char *Cmd)
 		return CheckChipType(cmdp);
 	}
 
+	ans=CmdPacDemod("");
+	if (ans>0) {
+		PrintAndLog("\nValid PAC/Stanley ID Found!");
+		return CheckChipType(cmdp);		
+	}
+
 	PrintAndLog("\nNo Known Tags Found!\n");
-	if (testRaw=='u' || testRaw=='U'){
-		ans=CheckChipType(cmdp);
+	if (testRaw=='u' || testRaw=='U') {
+		//ans=CheckChipType(cmdp);
 		//test unknown tag formats (raw mode)0
 		PrintAndLog("\nChecking for Unknown tags:\n");
-		ans=AutoCorrelate(4000, false, false);
+		ans=AutoCorrelate(GraphBuffer, GraphBuffer, GraphTraceLen, 4000, false, false);
 		if (ans > 0) PrintAndLog("Possible Auto Correlation of %d repeating samples",ans);
 		ans=GetFskClock("",false,false); 
-		if (ans != 0){ //fsk
+		if (ans != 0) { //fsk
 			ans=FSKrawDemod("",true);
 			if (ans>0) {
 				PrintAndLog("\nUnknown FSK Modulated Tag Found!");
-				return 1;
+				return CheckChipType(cmdp);
 			}
 		}
 		bool st = true;
@@ -1048,15 +1082,16 @@ int CmdLFfind(const char *Cmd)
 		if (ans>0) {
 			PrintAndLog("\nUnknown ASK Modulated and Manchester encoded Tag Found!");
 			PrintAndLog("\nif it does not look right it could instead be ASK/Biphase - try 'data rawdemod ab'");
-			return 1;
+			return CheckChipType(cmdp);
 		}
 		ans=CmdPSK1rawDemod("");
 		if (ans>0) {
 			PrintAndLog("Possible unknown PSK1 Modulated Tag Found above!\n\nCould also be PSK2 - try 'data rawdemod p2'");
 			PrintAndLog("\nCould also be PSK3 - [currently not supported]");
-			PrintAndLog("\nCould also be NRZ - try 'data nrzrawdemod");
-			return 1;
+			PrintAndLog("\nCould also be NRZ - try 'data rawdemod nr'");
+			return CheckChipType(cmdp);
 		}
+		ans = CheckChipType(cmdp);
 		PrintAndLog("\nNo Data Found!\n");
 	}
 	return 0;
@@ -1077,6 +1112,7 @@ static command_t CommandTable[] =
 	{"jablotron",   CmdLFJablotron,     1, "{ Jablotron RFIDs...         }"},
 	{"nexwatch",    CmdLFNexWatch,      1, "{ NexWatch RFIDs...          }"},
 	{"noralsy",     CmdLFNoralsy,       1, "{ Noralsy RFIDs...           }"},
+	{"pac",         CmdLFPac,           1, "{ PAC/Stanley RFIDs...       }"},
 	{"paradox",     CmdLFParadox,       1, "{ Paradox RFIDs...           }"},
 	{"presco",      CmdLFPresco,        1, "{ Presco RFIDs...            }"},
 	{"pcf7931",     CmdLFPCF7931,       1, "{ PCF7931 CHIPs...           }"},

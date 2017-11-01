@@ -1,3 +1,13 @@
+//-----------------------------------------------------------------------------
+//
+// This code is licensed to you under the terms of the GNU GPL, version 2 or,
+// at your option, any later version. See the LICENSE.txt file for the text of
+// the license.
+//-----------------------------------------------------------------------------
+// Low frequency ioProx commands
+// FSK2a, rf/64, 64 bits (complete)
+//-----------------------------------------------------------------------------
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,8 +53,9 @@ int CmdFSKdemodIO(const char *Cmd)
   size_t BitLen = getFromGraphBuf(BitStream);
   if (BitLen==0) return 0;
 
+  int waveIdx = 0;
   //get binary from fsk wave
-  idx = IOdemodFSK(BitStream,BitLen);
+  idx = IOdemodFSK(BitStream,BitLen, &waveIdx);
   if (idx<0){
     if (g_debugMode){
       if (idx==-1){
@@ -109,6 +120,8 @@ int CmdFSKdemodIO(const char *Cmd)
 
   PrintAndLog("IO Prox XSF(%02d)%02x:%05d (%08x%08x) [%02x %s]",version,facilitycode,number,code,code2, crc, crcStr);
   setDemodBuf(BitStream,64,idx);
+  setClockGrid(64, waveIdx + (idx*64));
+
   if (g_debugMode){
     PrintAndLog("DEBUG: idx: %d, Len: %d, Printing demod buffer:",idx,64);
     printDemodBuff();
@@ -120,20 +133,21 @@ int CmdIOClone(const char *Cmd)
 {
   unsigned int hi = 0, lo = 0;
   int n = 0, i = 0;
+  char ch;
   UsbCommand c;
 
-  
-  //if (1 == sscanf(str, "0x%"SCNx32, &hi)) {
-    // value now contains the value in the string--decimal 255, in this case.
-  //}
-  
   while (sscanf(&Cmd[i++], "%1x", &n ) == 1) {
       hi = (hi << 4) | (lo >> 28);
       lo = (lo << 4) | (n & 0xf);
   }
 
-  PrintAndLog("Cloning tag with ID %08x %08x", hi, lo);
-  PrintAndLog("Press pm3-button to abort simulation");
+  if (sscanf(&Cmd[--i], "%c", &ch) == 1) {
+	  PrintAndLog("Usage:    lf io clone <tag-ID>");
+	  return 0;
+  }
+  
+  PrintAndLog("Cloning ioProx tag with ID %08x %08x", hi, lo);
+
   c.cmd = CMD_IO_CLONE_TAG;
   c.arg[0] = hi;
   c.arg[1] = lo;

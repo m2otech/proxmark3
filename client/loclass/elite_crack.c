@@ -41,12 +41,13 @@
 #include <string.h>
 #include <stdio.h>
 #include "util.h"
+#include "util_posix.h"
 #include "cipherutils.h"
 #include "cipher.h"
 #include "ikeys.h"
 #include "elite_crack.h"
 #include "fileutils.h"
-#include "des.h"
+#include "polarssl/des.h"
 
 /**
  * @brief Permutes a key from standard NIST format to Iclass specific format

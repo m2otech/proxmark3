@@ -22,10 +22,13 @@
 #include "cmdlf.h"
 #include "cmdmain.h"
 #include "lfdemod.h"
+#include "protocols.h"
+#include "util_posix.h"
 
 uint64_t g_em410xId=0;
 
 static int CmdHelp(const char *Cmd);
+void ConstructEM410xEmulGraph(const char *uid,const  uint8_t clock);
 
 int CmdEMdemodASK(const char *Cmd)
 {
@@ -81,12 +84,12 @@ void printEM410x(uint32_t hi, uint64_t id)
 			    (id2lo & 0x000000000f)
 			);
 			uint64_t paxton = (((id>>32) << 24) | (id & 0xffffff))  + 0x143e00;
-			PrintAndLog("}\nOther          : %05" PRIu64 "_%03" PRIu64 "_%08" PRIu64 "",(id&0xFFFF),((id>>16LL) & 0xFF),(id & 0xFFFFFF));  
+			PrintAndLog("}\nOther          : %05" PRIu64 "_%03" PRIu64 "_%08" PRIu64 "",(id&0xFFFF),((id>>16LL) & 0xFF),(id & 0xFFFFFF));
 			PrintAndLog("Pattern Paxton : %" PRIu64 " [0x%" PRIX64 "]", paxton, paxton);
 
 			uint32_t p1id = (id & 0xFFFFFF);
 			uint8_t arr[32] = {0x00};
-			int i =0; 
+			int i =0;
 			int j = 23;
 			for (; i < 24; ++i, --j	){
 				arr[i] = (p1id >> i) & 1;
@@ -98,12 +101,12 @@ void printEM410x(uint32_t hi, uint64_t id)
 			p1 |= arr[22] << 23;
 			p1 |= arr[21] << 20;
 			p1 |= arr[20] << 22;
-				
+
 			p1 |= arr[19] << 18;
 			p1 |= arr[18] << 16;
 			p1 |= arr[17] << 19;
 			p1 |= arr[16] << 17;
-				
+
 			p1 |= arr[15] << 13;
 			p1 |= arr[14] << 15;
 			p1 |= arr[13] << 12;
@@ -145,17 +148,20 @@ void printEM410x(uint32_t hi, uint64_t id)
 int AskEm410xDecode(bool verbose, uint32_t *hi, uint64_t *lo )
 {
 	size_t idx = 0;
-	size_t BitLen = DemodBufferLen;
-	uint8_t BitStream[MAX_GRAPH_TRACE_LEN]={0};
-	memcpy(BitStream, DemodBuffer, BitLen); 
-	if (Em410xDecode(BitStream, &BitLen, &idx, hi, lo)){
+	uint8_t BitStream[512]={0};
+	size_t BitLen = sizeof(BitStream);
+	if ( !getDemodBuf(BitStream, &BitLen) ) return 0;
+
+	if (Em410xDecode(BitStream, &BitLen, &idx, hi, lo)) {
 		//set GraphBuffer for clone or sim command
-		setDemodBuf(BitStream, BitLen, idx);
-		if (g_debugMode){
+		setDemodBuf(DemodBuffer, (BitLen==40) ? 64 : 128, idx+1);
+		setClockGrid(g_DemodClock, g_DemodStartIdx + ((idx+1)*g_DemodClock));
+
+		if (g_debugMode) {
 			PrintAndLog("DEBUG: idx: %d, Len: %d, Printing Demod Buffer:", idx, BitLen);
 			printDemodBuff();
 		}
-		if (verbose){
+		if (verbose) {
 			PrintAndLog("EM410x pattern found: ");
 			printEM410x(*hi, *lo);
 			g_em410xId = *lo;
@@ -212,11 +218,54 @@ int usage_lf_em410x_sim(void) {
 	return 0;
 }
 
+// Construct the graph for emulating an EM410X tag
+void ConstructEM410xEmulGraph(const char *uid,const  uint8_t clock)
+{
+	int i, n, j, binary[4], parity[4];
+	/* clear our graph */
+	ClearGraph(0);
+
+	/* write 9 start bits */
+	for (i = 0; i < 9; i++)
+		AppendGraph(0, clock, 1);
+
+	/* for each hex char */
+	parity[0] = parity[1] = parity[2] = parity[3] = 0;
+	for (i = 0; i < 10; i++){
+		/* read each hex char */
+		sscanf(&uid[i], "%1x", &n);
+		for (j = 3; j >= 0; j--, n/= 2)
+			binary[j] = n % 2;
+
+		/* append each bit */
+		AppendGraph(0, clock, binary[0]);
+		AppendGraph(0, clock, binary[1]);
+		AppendGraph(0, clock, binary[2]);
+		AppendGraph(0, clock, binary[3]);
+
+		/* append parity bit */
+		AppendGraph(0, clock, binary[0] ^ binary[1] ^ binary[2] ^ binary[3]);
+
+		/* keep track of column parity */
+		parity[0] ^= binary[0];
+		parity[1] ^= binary[1];
+		parity[2] ^= binary[2];
+		parity[3] ^= binary[3];
+	}
+
+	/* parity columns */
+	AppendGraph(0, clock, parity[0]);
+	AppendGraph(0, clock, parity[1]);
+	AppendGraph(0, clock, parity[2]);
+	AppendGraph(0, clock, parity[3]);
+
+	/* stop bit */
+	AppendGraph(1, clock, 0);
+}
+
 // emulate an EM410X tag
 int CmdEM410xSim(const char *Cmd)
 {
-	int i, n, j, binary[4], parity[4];
-
 	char cmdp = param_getchar(Cmd, 0);
 	uint8_t uid[5] = {0x00};
 
@@ -231,61 +280,153 @@ int CmdEM410xSim(const char *Cmd)
 	param_getdec(Cmd,1, &clock);
 
 	PrintAndLog("Starting simulating UID %02X%02X%02X%02X%02X  clock: %d", uid[0],uid[1],uid[2],uid[3],uid[4],clock);
-	PrintAndLog("Press pm3-button to about simulation");
+	PrintAndLog("Press pm3-button to abort simulation");
 
-
-	/* clear our graph */
-	ClearGraph(0);
-
-		/* write 9 start bits */
-		for (i = 0; i < 9; i++)
-			AppendGraph(0, clock, 1);
-
-		/* for each hex char */
-		parity[0] = parity[1] = parity[2] = parity[3] = 0;
-		for (i = 0; i < 10; i++)
-		{
-			/* read each hex char */
-			sscanf(&Cmd[i], "%1x", &n);
-			for (j = 3; j >= 0; j--, n/= 2)
-				binary[j] = n % 2;
-
-			/* append each bit */
-			AppendGraph(0, clock, binary[0]);
-			AppendGraph(0, clock, binary[1]);
-			AppendGraph(0, clock, binary[2]);
-			AppendGraph(0, clock, binary[3]);
-
-			/* append parity bit */
-			AppendGraph(0, clock, binary[0] ^ binary[1] ^ binary[2] ^ binary[3]);
-
-			/* keep track of column parity */
-			parity[0] ^= binary[0];
-			parity[1] ^= binary[1];
-			parity[2] ^= binary[2];
-			parity[3] ^= binary[3];
-		}
-
-		/* parity columns */
-		AppendGraph(0, clock, parity[0]);
-		AppendGraph(0, clock, parity[1]);
-		AppendGraph(0, clock, parity[2]);
-		AppendGraph(0, clock, parity[3]);
-
-		/* stop bit */
-	AppendGraph(1, clock, 0);
- 
+	ConstructEM410xEmulGraph(Cmd, clock);
+	
 	CmdLFSim("0"); //240 start_gap.
 	return 0;
 }
 
+int usage_lf_em410x_brute(void) {
+	PrintAndLog("Bruteforcing by emulating EM410x tag");
+	PrintAndLog("");
+	PrintAndLog("Usage:  lf em 410xbrute [h] ids.txt [d 2000] [c clock]");
+	PrintAndLog("Options:");
+	PrintAndLog("       h             - this help");
+	PrintAndLog("       ids.txt       - file with UIDs in HEX format, one per line");
+	PrintAndLog("       d (2000)      - pause delay in milliseconds between UIDs simulation, default 1000 ms (optional)");
+	PrintAndLog("       c (32)        - clock (32|64), default 64 (optional)");
+	PrintAndLog("samples:");
+	PrintAndLog("      lf em 410xbrute ids.txt");
+	PrintAndLog("      lf em 410xbrute ids.txt c 32");
+	PrintAndLog("      lf em 410xbrute ids.txt d 3000");
+	PrintAndLog("      lf em 410xbrute ids.txt d 3000 c 32");
+	return 0;
+}
+
+int CmdEM410xBrute(const char *Cmd)
+{
+	char filename[FILE_PATH_SIZE]={0};
+	FILE *f = NULL;
+	char buf[11];
+	uint32_t uidcnt = 0;
+	uint8_t stUidBlock = 20;
+	uint8_t *uidBlock = NULL, *p = NULL;
+	int ch;
+	uint8_t uid[5] = {0x00};
+	/* clock is 64 in EM410x tags */
+	uint8_t clock = 64;
+	/* default pause time: 1 second */
+	uint32_t delay = 1000;
+	
+	char cmdp = param_getchar(Cmd, 0);
+	
+	if (cmdp == 'h' || cmdp == 'H') return usage_lf_em410x_brute();
+	
+
+	cmdp = param_getchar(Cmd, 1);
+	
+	if (cmdp == 'd' || cmdp == 'D') {
+		delay = param_get32ex(Cmd, 2, 1000, 10);
+		param_getdec(Cmd, 4, &clock);
+	} else if (cmdp == 'c' || cmdp == 'C') {
+		param_getdec(Cmd, 2, &clock);
+		delay = param_get32ex(Cmd, 4, 1000, 10);
+	}
+
+	param_getstr(Cmd, 0, filename);
+	
+	uidBlock = calloc(stUidBlock, 5);
+	if (uidBlock == NULL) return 1;
+
+	if (strlen(filename) > 0) {
+		if ((f = fopen(filename, "r")) == NULL) {
+			PrintAndLog("Error: Could not open UIDs file [%s]",filename);
+			free(uidBlock);
+			return 1;
+		}
+	} else {
+		PrintAndLog("Error: Please specify a filename");
+		free(uidBlock);
+		return 1;
+	}
+
+	while( fgets(buf, sizeof(buf), f) ) {
+		if (strlen(buf) < 10 || buf[9] == '\n') continue;
+		while (fgetc(f) != '\n' && !feof(f));  //goto next line
+
+		//The line start with # is comment, skip
+		if( buf[0]=='#' ) continue;
+		
+		if (param_gethex(buf, 0, uid, 10)) {
+			PrintAndLog("UIDs must include 10 HEX symbols");
+			free(uidBlock);
+			fclose(f);
+			return 1;
+		}
+		
+		buf[10] = 0;
+		
+		if ( stUidBlock - uidcnt < 2) {
+				p = realloc(uidBlock, 5*(stUidBlock+=10));
+				if (!p) {
+					PrintAndLog("Cannot allocate memory for UIDs");
+					free(uidBlock);
+					fclose(f);
+					return 1;
+				}
+				uidBlock = p;
+		}
+		memset(uidBlock + 5 * uidcnt, 0, 5);
+		num_to_bytes(strtoll(buf, NULL, 16), 5, uidBlock + 5*uidcnt);
+		uidcnt++;
+	  	memset(buf, 0, sizeof(buf));
+	}
+	fclose(f);
+	
+	if (uidcnt == 0) {
+		PrintAndLog("No UIDs found in file");
+		free(uidBlock);
+		return 1;
+	}
+	PrintAndLog("Loaded %d UIDs from %s, pause delay: %d ms", uidcnt, filename, delay);
+	
+	// loop
+	for(uint32_t c = 0; c < uidcnt; ++c ) {
+		char testuid[11];
+		testuid[10] = 0;
+		
+		if (ukbhit()) {
+			ch = getchar();
+			(void)ch;
+			printf("\nAborted via keyboard!\n");
+			free(uidBlock);
+			return 0;
+		}
+				
+		sprintf(testuid, "%010" PRIX64, bytes_to_num(uidBlock + 5*c, 5));
+		PrintAndLog("Bruteforce %d / %d: simulating UID  %s, clock %d", c + 1, uidcnt, testuid, clock);
+		
+		ConstructEM410xEmulGraph(testuid, clock);
+		
+		CmdLFSim("0"); //240 start_gap.
+
+		msleep(delay);
+	}
+	
+	free(uidBlock);
+	return 0;
+}
+
+
 /* Function is equivalent of lf read + data samples + em410xread
- * looped until an EM410x tag is detected 
- * 
+ * looped until an EM410x tag is detected
+ *
  * Why is CmdSamples("16000")?
  *  TBD: Auto-grow sample size based on detected sample rate.  IE: If the
  *       rate gets lower, then grow the number of samples
- *  Changed by martin, 4000 x 4 = 16000, 
+ *  Changed by martin, 4000 x 4 = 16000,
  *  see http://www.proxmark.org/forum/viewtopic.php?pid=7235#p7235
  *
  *  EDIT -- capture enough to get 2 complete preambles at the slowest data rate known to be used (rf/64) (64*64*2+9 = 8201)	marshmellow
@@ -297,9 +438,7 @@ int CmdEM410xWatch(const char *Cmd)
 			printf("\naborted via keyboard!\n");
 			break;
 		}
-		
-		CmdLFRead("s");
-		getSamples("8201",true); 
+		lf_read(true, 8201);
 	} while (!CmdAskEM410xDemod(""));
 
 	return 0;
@@ -456,7 +595,7 @@ uint32_t OutputEM4x50_Block(uint8_t *BitStream, size_t size, bool verbose, bool 
 int EM4x50Read(const char *Cmd, bool verbose)
 {
 	uint8_t fndClk[] = {8,16,32,40,50,64,128};
-	int clk = 0; 
+	int clk = 0;
 	int invert = 0;
 	int tol = 0;
 	int i, j, startblock, skip, block, start, end, low, high, minClk;
@@ -467,13 +606,10 @@ int EM4x50Read(const char *Cmd, bool verbose)
 	char tmp2[20];
 	int phaseoff;
 	high = low = 0;
-	memset(tmpbuff, 0, MAX_GRAPH_TRACE_LEN / 64);
+	memset(tmpbuff, 0, sizeof(tmpbuff));
 
 	// get user entry if any
 	sscanf(Cmd, "%i %i", &clk, &invert);
-	
-	// save GraphBuffer - to restore it later	
-	save_restoreGB(1);
 
 	// first get high and low values
 	for (i = 0; i < GraphTraceLen; i++) {
@@ -515,7 +651,7 @@ int EM4x50Read(const char *Cmd, bool verbose)
 	if (!clk) {
 		for (uint8_t clkCnt = 0; clkCnt<7; clkCnt++) {
 			tol = fndClk[clkCnt]/8;
-			if (minClk >= fndClk[clkCnt]-tol && minClk <= fndClk[clkCnt]+1) { 
+			if (minClk >= fndClk[clkCnt]-tol && minClk <= fndClk[clkCnt]+1) {
 				clk=fndClk[clkCnt];
 				break;
 			}
@@ -540,7 +676,7 @@ int EM4x50Read(const char *Cmd, bool verbose)
 
 	// skip over the remainder of LW
 	skip += tmpbuff[i+1] + tmpbuff[i+2] + clk;
-	if (tmpbuff[i+3]>clk) 
+	if (tmpbuff[i+3]>clk)
 		phaseoff = tmpbuff[i+3]-clk;
 	else
 		phaseoff = 0;
@@ -571,7 +707,9 @@ int EM4x50Read(const char *Cmd, bool verbose)
 	} else if (start < 0) return 0;
 	start = skip;
 	snprintf(tmp2, sizeof(tmp2),"%d %d 1000 %d", clk, invert, clk*47);
-	// get rid of leading crap 
+	// save GraphBuffer - to restore it later
+	save_restoreGB(GRAPH_SAVE);
+	// get rid of leading crap
 	snprintf(tmp, sizeof(tmp), "%i", skip);
 	CmdLtrim(tmp);
 	bool pTest;
@@ -582,7 +720,7 @@ int EM4x50Read(const char *Cmd, bool verbose)
 	while (block < 6) {
 		if (verbose || g_debugMode) PrintAndLog("\nBlock %i:", block);
 		skip = phaseoff;
-		
+
 		// look for LW before start of next block
 		for ( ; i < j - 4 ; ++i) {
 			skip += tmpbuff[i];
@@ -598,13 +736,13 @@ int EM4x50Read(const char *Cmd, bool verbose)
 			phaseoff = 0;
 		i += 2;
 		if (ASKDemod(tmp2, false, false, 1) < 1) {
-			save_restoreGB(0);
+			save_restoreGB(GRAPH_RESTORE);
 			return 0;
 		}
 		//set DemodBufferLen to just one block
 		DemodBufferLen = skip/clk;
 		//test parities
-		pTest = EM_ByteParityTest(DemodBuffer,DemodBufferLen,5,9,0);	
+		pTest = EM_ByteParityTest(DemodBuffer,DemodBufferLen,5,9,0);
 		pTest &= EM_EndParityTest(DemodBuffer,DemodBufferLen,5,9,0);
 		AllPTest &= pTest;
 		//get output
@@ -623,7 +761,7 @@ int EM4x50Read(const char *Cmd, bool verbose)
 			PrintAndLog("Partial data - no end found!");
 			PrintAndLog("Try again with more samples.");
 		}
-		PrintAndLog("Found data at sample: %i - using clock: %i", start, clk);    
+		PrintAndLog("Found data at sample: %i - using clock: %i", start, clk);
 		end = block;
 		for (block=0; block < end; block++){
 			PrintAndLog("Block %d: %08x",block,Code[block]);
@@ -637,7 +775,7 @@ int EM4x50Read(const char *Cmd, bool verbose)
 	}
 
 	//restore GraphBuffer
-	save_restoreGB(0);
+	save_restoreGB(GRAPH_RESTORE);
 	return (int)AllPTest;
 }
 
@@ -665,7 +803,7 @@ int usage_lf_em_read(void) {
 // download samples from device and copy them to the Graphbuffer
 bool downloadSamplesEM() {
 	// 8 bit preamble + 32 bit word response (max clock (128) * 40bits = 5120 samples)
-	uint8_t got[6000]; 
+	uint8_t got[6000];
 	GetFromBigBuf(got, sizeof(got), 0);
 	if ( !WaitForResponseTimeout(CMD_ACK, NULL, 4000) ) {
 		PrintAndLog("command execution time out");
@@ -697,18 +835,20 @@ bool EM4x05testDemodReadData(uint32_t *word, bool readCmd) {
 			return false;
 		}
 		// test for even parity bits and remove them. (leave out the end row of parities so 36 bits)
-		if ( removeParity(DemodBuffer, startIdx + sizeof(preamble),9,0,36) == 0 ) {		
+		if ( removeParity(DemodBuffer, startIdx + sizeof(preamble),9,0,36) == 0 ) {
 			if (g_debugMode) PrintAndLog("DEBUG: Error - Parity not detected");
 			return false;
 		}
 
 		setDemodBuf(DemodBuffer, 32, 0);
+		//setClockGrid(0,0);
+
 		*word = bytebits_to_byteLSBF(DemodBuffer, 32);
 	}
 	return true;
 }
 
-// FSK, PSK, ASK/MANCHESTER, ASK/BIPHASE, ASK/DIPHASE 
+// FSK, PSK, ASK/MANCHESTER, ASK/BIPHASE, ASK/DIPHASE
 // should cover 90% of known used configs
 // the rest will need to be manually demoded for now...
 int demodEM4x05resp(uint32_t *word, bool readCmd) {
@@ -775,7 +915,7 @@ int demodEM4x05resp(uint32_t *word, bool readCmd) {
 
 	//try biphase
 	ans = ASKbiphaseDemod("0 0 1", false);
-	if (!ans) { 
+	if (!ans) {
 		if (g_debugMode) PrintAndLog("DEBUG: Error - EM4305: ASK/biphase Demod failed, ans: %d", ans);
 	} else {
 		if (EM4x05testDemodReadData(word, readCmd)) {
@@ -785,7 +925,7 @@ int demodEM4x05resp(uint32_t *word, bool readCmd) {
 
 	//try diphase (differential biphase or inverted)
 	ans = ASKbiphaseDemod("0 1 1", false);
-	if (!ans) { 
+	if (!ans) {
 		if (g_debugMode) PrintAndLog("DEBUG: Error - EM4305: ASK/biphase Demod failed, ans: %d", ans);
 	} else {
 		if (EM4x05testDemodReadData(word, readCmd)) {
@@ -800,7 +940,7 @@ int EM4x05ReadWord_ext(uint8_t addr, uint32_t pwd, bool usePwd, uint32_t *wordDa
 	UsbCommand c = {CMD_EM4X_READ_WORD, {addr, pwd, usePwd}};
 	clearCommandBuffer();
 	SendCommand(&c);
-	UsbCommand resp;	
+	UsbCommand resp;
 	if (!WaitForResponseTimeout(CMD_ACK, &resp, 2500)){
 		PrintAndLog("Command timed out");
 		return -1;
@@ -838,7 +978,7 @@ int CmdEM4x05ReadWord(const char *Cmd) {
 	addr = param_get8ex(Cmd, 0, 50, 10);
 	// for now use default input of 1 as invalid (unlikely 1 will be a valid password...)
 	pwd =  param_get32ex(Cmd, 1, 1, 16);
-	
+
 	if ( (addr > 15) ) {
 		PrintAndLog("Address must be between 0 and 15");
 		return 1;
@@ -875,7 +1015,7 @@ int CmdEM4x05dump(const char *Cmd) {
 
 	// for now use default input of 1 as invalid (unlikely 1 will be a valid password...)
 	pwd = param_get32ex(Cmd, 0, 1, 16);
-	
+
 	if ( pwd != 1 ) {
 		usePwd = true;
 	}
@@ -899,47 +1039,35 @@ int CmdEM4x05dump(const char *Cmd) {
 int usage_lf_em_write(void) {
 	PrintAndLog("Write EM4x05/EM4x69.  Tag must be on antenna. ");
 	PrintAndLog("");
-	PrintAndLog("Usage:  lf em 4x05writeword [h] [s] <address> <data> <pwd>");
+	PrintAndLog("Usage:  lf em 4x05writeword [h] a <address> d <data> p <pwd> [s] [i]");
 	PrintAndLog("Options:");
-	PrintAndLog("       h         - this help");
-	PrintAndLog("       s         - swap data bit order before write");
-	PrintAndLog("       address   - memory address to write to. (0-15)");
-	PrintAndLog("       data      - data to write (hex)");	
-	PrintAndLog("       pwd       - password (hex) (optional)");
+	PrintAndLog("       h           - this help");
+	PrintAndLog("       a <address> - memory address to write to. (0-15)");
+	PrintAndLog("       d <data>    - data to write (hex)");
+	PrintAndLog("       p <pwd>     - password (hex) (optional)");
+	PrintAndLog("       s           - swap the data bit order before write");
+	PrintAndLog("       i           - invert the data bits before write");
 	PrintAndLog("samples:");
-	PrintAndLog("      lf em 4x05writeword 1");
-	PrintAndLog("      lf em 4x05writeword 1 deadc0de 11223344");
+	PrintAndLog("      lf em 4x05writeword a 5 d 11223344");
+	PrintAndLog("      lf em 4x05writeword a 5 p deadc0de d 11223344 s i");
 	return 0;
 }
 
-int CmdEM4x05WriteWord(const char *Cmd) {
-	uint8_t ctmp = param_getchar(Cmd, 0);
-	if ( strlen(Cmd) == 0 || ctmp == 'H' || ctmp == 'h' ) return usage_lf_em_write();
+// note: em4x05 doesn't have a way to invert data output so we must invert the data prior to writing
+//         it if invertion is needed. (example FSK2a vs FSK)
+//       also em4x05 requires swapping word data when compared to the data used for t55xx chips.
+int EM4x05WriteWord(uint8_t addr, uint32_t data, uint32_t pwd, bool usePwd, bool swap, bool invert) {
+	if (swap) data = SwapBits(data, 32);
 
-	bool usePwd = false;
-
-	uint8_t addr = 16; // default to invalid address
-	uint32_t data = 0xFFFFFFFF; // default to blank data
-	uint32_t pwd = 0xFFFFFFFF; // default to blank password
-	char swap = 0;
-
-	int p = 0;
-	swap = param_getchar(Cmd, 0);
-	if (swap == 's' || swap=='S') p++;
-	addr = param_get8ex(Cmd, p++, 16, 10);
-	data = param_get32ex(Cmd, p++, 0, 16);
-	pwd  = param_get32ex(Cmd, p++, 1, 16);
-
-	if (swap == 's' || swap=='S') data = SwapBits(data, 32);
+	if (invert) data ^= 0xFFFFFFFF;
 
 	if ( (addr > 15) ) {
 		PrintAndLog("Address must be between 0 and 15");
-		return 1;
+		return -1;
 	}
-	if ( pwd == 1 )
-		PrintAndLog("Writing address %d data %08X", addr, data);	
-	else {
-		usePwd = true;
+	if ( !usePwd ) {
+		PrintAndLog("Writing address %d data %08X", addr, data);
+	} else {
 		PrintAndLog("Writing address %d data %08X using password %08X", addr, data, pwd);
 	}
 
@@ -968,8 +1096,75 @@ int CmdEM4x05WriteWord(const char *Cmd) {
 	return result;
 }
 
+int CmdEM4x05WriteWord(const char *Cmd) {
+	bool errors = false;
+	bool usePwd = false;
+	uint32_t data = 0xFFFFFFFF;
+	uint32_t pwd = 0xFFFFFFFF;
+	bool swap = false;
+	bool invert = false;
+	uint8_t addr = 16; // default to invalid address
+	bool gotData = false;
+	char cmdp = 0;
+	while(param_getchar(Cmd, cmdp) != 0x00)
+	{
+		switch(param_getchar(Cmd, cmdp))
+		{
+		case 'h':
+		case 'H':
+			return usage_lf_em_write();
+		case 'a':
+		case 'A':
+			addr = param_get8ex(Cmd, cmdp+1, 16, 10);
+			cmdp += 2;
+			break;
+		case 'd':
+		case 'D':
+			data = param_get32ex(Cmd, cmdp+1, 0, 16);
+			gotData = true;
+			cmdp += 2;
+			break;
+		case 'i':
+		case 'I':
+			invert = true;
+			cmdp++;
+			break;
+		case 'p':
+		case 'P':
+			pwd = param_get32ex(Cmd, cmdp+1, 1, 16);
+			if (pwd == 1) {
+				PrintAndLog("invalid pwd");
+				errors = true;
+			}
+			usePwd = true;
+			cmdp += 2;
+			break;
+		case 's':
+		case 'S':
+			swap = true;
+			cmdp++;
+			break;
+		default:
+			PrintAndLog("Unknown parameter '%c'", param_getchar(Cmd, cmdp));
+			errors = true;
+			break;
+		}
+		if(errors) break;
+	}
+	//Validations
+	if(errors) return usage_lf_em_write();
+
+	if ( strlen(Cmd) == 0 ) return usage_lf_em_write();
+
+	if (!gotData) {
+		PrintAndLog("You must enter the data you want to write");
+		return usage_lf_em_write();
+	}
+	return EM4x05WriteWord(addr, data, pwd, usePwd, swap, invert);
+}
+
 void printEM4x05config(uint32_t wordData) {
-	uint16_t datarate = (((wordData & 0x3F)+1)*2);
+	uint16_t datarate = EM4x05_GET_BITRATE(wordData);
 	uint8_t encoder = ((wordData >> 6) & 0xF);
 	char enc[14];
 	memset(enc,0,sizeof(enc));
@@ -980,8 +1175,8 @@ void printEM4x05config(uint32_t wordData) {
 	uint8_t delay = (wordData >> 12) & 0x3;
 	char cdelay[33];
 	memset(cdelay,0,sizeof(cdelay));
-	uint8_t LWR = (wordData >> 14) & 0xF; //last word read
-
+	uint8_t numblks = EM4x05_GET_NUM_BLOCKS(wordData);
+	uint8_t LWR = numblks+5-1; //last word read
 	switch (encoder) {
 		case 0: snprintf(enc,sizeof(enc),"NRZ"); break;
 		case 1: snprintf(enc,sizeof(enc),"Manchester"); break;
@@ -1009,21 +1204,29 @@ void printEM4x05config(uint32_t wordData) {
 		case 2: snprintf(cdelay, sizeof(cdelay),"BP/4 or 1/4th bit period delay"); break;
 		case 3: snprintf(cdelay, sizeof(cdelay),"no delay"); break;
 	}
+	uint8_t readLogin = (wordData & EM4x05_READ_LOGIN_REQ)>>18;
+	uint8_t readHKL = (wordData & EM4x05_READ_HK_LOGIN_REQ)>>19;
+	uint8_t writeLogin = (wordData & EM4x05_WRITE_LOGIN_REQ)>>20;
+	uint8_t writeHKL = (wordData & EM4x05_WRITE_HK_LOGIN_REQ)>>21;
+	uint8_t raw = (wordData & EM4x05_READ_AFTER_WRITE)>>22;
+	uint8_t disable = (wordData & EM4x05_DISABLE_ALLOWED)>>23;
+	uint8_t rtf = (wordData & EM4x05_READER_TALK_FIRST)>>24;
+	uint8_t pigeon = (wordData & (1<<26))>>26;
 	PrintAndLog("ConfigWord: %08X (Word 4)\n", wordData);
-	PrintAndLog("Config Breakdown:", wordData);
+	PrintAndLog("Config Breakdown:");
 	PrintAndLog(" Data Rate:  %02u | RF/%u", wordData & 0x3F, datarate);
 	PrintAndLog("   Encoder:   %u | %s", encoder, enc);
 	PrintAndLog("    PSK CF:   %u | %s", PSKcf, cf);
 	PrintAndLog("     Delay:   %u | %s", delay, cdelay);
-	PrintAndLog(" LastWordR:  %02u | Address of last word for default read", LWR);
-	PrintAndLog(" ReadLogin:   %u | Read Login is %s", (wordData & 0x40000)>>18, (wordData & 0x40000) ? "Required" : "Not Required");	
-	PrintAndLog("   ReadHKL:   %u | Read Housekeeping Words Login is %s", (wordData & 0x80000)>>19, (wordData & 0x80000) ? "Required" : "Not Required");	
-	PrintAndLog("WriteLogin:   %u | Write Login is %s", (wordData & 0x100000)>>20, (wordData & 0x100000) ? "Required" : "Not Required");	
-	PrintAndLog("  WriteHKL:   %u | Write Housekeeping Words Login is %s", (wordData & 0x200000)>>21, (wordData & 0x200000) ? "Required" : "Not Required");	
-	PrintAndLog("    R.A.W.:   %u | Read After Write is %s", (wordData & 0x400000)>>22, (wordData & 0x400000) ? "On" : "Off");
-	PrintAndLog("   Disable:   %u | Disable Command is %s", (wordData & 0x800000)>>23, (wordData & 0x800000) ? "Accepted" : "Not Accepted");
-	PrintAndLog("    R.T.F.:   %u | Reader Talk First is %s", (wordData & 0x1000000)>>24, (wordData & 0x1000000) ? "Enabled" : "Disabled");
-	PrintAndLog("    Pigeon:   %u | Pigeon Mode is %s\n", (wordData & 0x4000000)>>26, (wordData & 0x4000000) ? "Enabled" : "Disabled");
+	PrintAndLog(" LastWordR:  %02u | Address of last word for default read - meaning %u blocks are output", LWR, numblks);
+	PrintAndLog(" ReadLogin:   %u | Read Login is %s", readLogin, readLogin ? "Required" : "Not Required");
+	PrintAndLog("   ReadHKL:   %u | Read Housekeeping Words Login is %s", readHKL, readHKL ? "Required" : "Not Required");
+	PrintAndLog("WriteLogin:   %u | Write Login is %s", writeLogin, writeLogin ? "Required" : "Not Required");
+	PrintAndLog("  WriteHKL:   %u | Write Housekeeping Words Login is %s", writeHKL, writeHKL ? "Required" : "Not Required");
+	PrintAndLog("    R.A.W.:   %u | Read After Write is %s", raw, raw ? "On" : "Off");
+	PrintAndLog("   Disable:   %u | Disable Command is %s", disable, disable ? "Accepted" : "Not Accepted");
+	PrintAndLog("    R.T.F.:   %u | Reader Talk First is %s", rtf, rtf ? "Enabled" : "Disabled");
+	PrintAndLog("    Pigeon:   %u | Pigeon Mode is %s\n", pigeon, pigeon ? "Enabled" : "Disabled");
 }
 
 void printEM4x05info(uint8_t chipType, uint8_t cap, uint16_t custCode, uint32_t serial) {
@@ -1076,20 +1279,20 @@ int CmdEM4x05info(const char *Cmd) {
 
 	// for now use default input of 1 as invalid (unlikely 1 will be a valid password...)
 	pwd = param_get32ex(Cmd, 0, 1, 16);
-	
+
 	if ( pwd != 1 ) {
 		usePwd = true;
 	}
 
 	// read word 0 (chip info)
 	// block 0 can be read even without a password.
-	if ( !EM4x05Block0Test(&wordData) ) 
+	if ( !EM4x05Block0Test(&wordData) )
 		return -1;
-	
+
 	uint8_t chipType = (wordData >> 1) & 0xF;
 	uint8_t cap = (wordData >> 5) & 3;
 	uint16_t custCode = (wordData >> 9) & 0x3FF;
-	
+
 	// read word 1 (serial #) doesn't need pwd
 	wordData = 0;
 	if (EM4x05ReadWord_ext(1, 0, false, &wordData) != 1) {
@@ -1097,11 +1300,12 @@ int CmdEM4x05info(const char *Cmd) {
 	}
 	printEM4x05info(chipType, cap, custCode, wordData);
 
-	// read word 4 (config block) 
+	// read word 4 (config block)
 	// needs password if one is set
 	wordData = 0;
 	if ( EM4x05ReadWord_ext(4, pwd, usePwd, &wordData) != 1 ) {
 		//failed
+		PrintAndLog("Config block read failed - might be password protected.");
 		return 0;
 	}
 	printEM4x05config(wordData);
@@ -1132,9 +1336,10 @@ int CmdEM4x05info(const char *Cmd) {
 static command_t CommandTable[] =
 {
 	{"help",      CmdHelp, 1, "This help"},
-	{"410xread",  CmdEMdemodASK, 0, "[findone] -- Extract ID from EM410x tag (option 0 for continuous loop, 1 for only 1 tag)"},  
+	{"410xread",  CmdEMdemodASK, 0, "[findone] -- Extract ID from EM410x tag (option 0 for continuous loop, 1 for only 1 tag)"},
 	{"410xdemod", CmdAskEM410xDemod,  1, "[clock] [invert<0|1>] [maxErr] -- Demodulate an EM410x tag from GraphBuffer (args optional)"},
 	{"410xsim",   CmdEM410xSim, 0, "<UID> [clock rate] -- Simulate EM410x tag"},
+	{"410xbrute",   CmdEM410xBrute, 0, "ids.txt [d (delay in ms)] [c (clock rate)] -- Reader bruteforce attack by simulating EM410x tags"},
 	{"410xwatch", CmdEM410xWatch, 0, "['h'] -- Watches for EM410x 125/134 kHz tags (option 'h' for 134)"},
 	{"410xspoof", CmdEM410xWatchnSpoof, 0, "['h'] --- Watches for EM410x 125/134 kHz tags, and replays them. (option 'h' for 134)" },
 	{"410xwrite", CmdEM410xWrite, 0, "<UID> <'0' T5555> <'1' T55x7> [clock rate] -- Write EM410x UID to T5555(Q5) or T55x7 tag, optionally setting clock rate"},

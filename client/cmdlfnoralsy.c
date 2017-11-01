@@ -5,7 +5,7 @@
 // the license.
 //-----------------------------------------------------------------------------
 // Low frequency Noralsy tag commands
-// ASK/Manchester, STT, RF/32, 96 bits long
+// ASK/Manchester, STT, RF/32, 96 bits long (some bits unknown)
 //-----------------------------------------------------------------------------
 #include "cmdlfnoralsy.h"
 #include <string.h>
@@ -98,20 +98,21 @@ int NoralsyDemod_AM(uint8_t *dest, size_t *size) {
 /*
 *
 * 2520116 | BB0214FF2529900116360000 | 10111011 00000011 00010100 11111111 00100101 00101001 10010000 00000001 00010110 00110110 00000000 00000000
-*           aaaaaaaaiii***iiiicc----                                       iiiiiiii iiiiYYYY YYYY**** iiiiiiii iiiiiiii cccccccc
+*           aaa*aaaaiiiYY*iiiicc----                ****                   iiiiiiii iiiiYYYY YYYY**** iiiiiiii iiiiiiii cccccccc
 *
-* a = fixed value BB0314FF 
+* a = fixed value BB0*14FF 
 * i = printed id, BCD-format
 * Y = year
 * c = checksum
-* 
+* * = unknown
+*
 **/
 
 //see ASKDemod for what args are accepted
 int CmdNoralsyDemod(const char *Cmd) {
 
 	//ASK / Manchester
-	bool st = false;
+	bool st = true;
 	if (!ASKDemod_ext("32 0 0", false, false, 1, &st)) {
 		if (g_debugMode) PrintAndLog("DEBUG: Error - Noralsy: ASK/Manchester Demod failed");
 		return 0;
@@ -134,6 +135,7 @@ int CmdNoralsyDemod(const char *Cmd) {
 		return 0;
 	}
 	setDemodBuf(DemodBuffer, 96, ans);
+	setClockGrid(g_DemodClock, g_DemodStartIdx + (ans*g_DemodClock));
 	//setGrid_Clock(32);
 
 	//got a good demod
@@ -171,8 +173,7 @@ int CmdNoralsyDemod(const char *Cmd) {
 }
 
 int CmdNoralsyRead(const char *Cmd) {
-	CmdLFRead("s");
-	getSamples("8000",true);
+	lf_read(true, 8000);
 	return CmdNoralsyDemod(Cmd);
 }
 

@@ -5,7 +5,7 @@
 // at your option, any later version. See the LICENSE.txt file for the text of
 // the license.
 //-----------------------------------------------------------------------------
-// Low frequency HID commands
+// Low frequency HID commands (known)
 //-----------------------------------------------------------------------------
 
 #include <stdio.h>
@@ -32,7 +32,8 @@ int CmdFSKdemodHID(const char *Cmd)
   size_t BitLen = getFromGraphBuf(BitStream);
   if (BitLen==0) return 0;
   //get binary from fsk wave
-  int idx = HIDdemodFSK(BitStream,&BitLen,&hi2,&hi,&lo);
+  int waveIdx = 0;
+  int idx = HIDdemodFSK(BitStream,&BitLen,&hi2,&hi,&lo, &waveIdx);
   if (idx<0){
     if (g_debugMode){
       if (idx==-1){
@@ -99,6 +100,7 @@ int CmdFSKdemodHID(const char *Cmd)
       (unsigned int) fmtLen, (unsigned int) fc, (unsigned int) cardnum);
   }
   setDemodBuf(BitStream,BitLen,idx);
+  setClockGrid(50, waveIdx + (idx*50));
   if (g_debugMode){ 
     PrintAndLog("DEBUG: idx: %d, Len: %d, Printing Demod Buffer:", idx, BitLen);
     printDemodBuff();
@@ -118,20 +120,20 @@ int CmdHIDReadFSK(const char *Cmd)
 
 int CmdHIDSim(const char *Cmd)
 {
-  unsigned int hi = 0, lo = 0;
-  int n = 0, i = 0;
+	uint32_t hi = 0, lo = 0;
+	int n = 0, i = 0;
 
-  while (sscanf(&Cmd[i++], "%1x", &n ) == 1) {
-    hi = (hi << 4) | (lo >> 28);
-    lo = (lo << 4) | (n & 0xf);
-  }
+	while (sscanf(&Cmd[i++], "%1x", &n ) == 1) {
+		hi = (hi << 4) | (lo >> 28);
+		lo = (lo << 4) | (n & 0xf);
+	}
 
-  PrintAndLog("Emulating tag with ID %x%16x", hi, lo);
-  PrintAndLog("Press pm3-button to abort simulation");
+	PrintAndLog("Emulating tag with ID %x%08x", hi, lo);
+	PrintAndLog("Press pm3-button to abort simulation");
 
-  UsbCommand c = {CMD_HID_SIM_TAG, {hi, lo, 0}};
-  SendCommand(&c);
-  return 0;
+	UsbCommand c = {CMD_HID_SIM_TAG, {hi, lo, 0}};
+	SendCommand(&c);
+	return 0;
 }
 
 int CmdHIDClone(const char *Cmd)

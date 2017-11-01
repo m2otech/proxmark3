@@ -5,6 +5,7 @@
 // the license.
 //-----------------------------------------------------------------------------
 // Low frequency Indala commands
+// PSK1, rf/32, 64 or 224 bits (known)
 //-----------------------------------------------------------------------------
 
 #include <stdio.h>
@@ -39,12 +40,19 @@ int CmdIndalaDecode(const char *Cmd) {
 	}
 	uint8_t invert=0;
 	size_t size = DemodBufferLen;
-	int startIdx = indala26decode(DemodBuffer, &size, &invert);
-	if (startIdx < 0 || size > 224) {
-		if (g_debugMode) PrintAndLog("Error2: %i",startIdx);
-		return -1;
+	int startIdx = indala64decode(DemodBuffer, &size, &invert);
+	if (startIdx < 0 || size != 64) {
+		// try 224 indala
+		invert = 0;
+		size = DemodBufferLen;
+		startIdx = indala224decode(DemodBuffer, &size, &invert);
+		if (startIdx < 0 || size != 224) {
+			if (g_debugMode) PrintAndLog("Error2: %i",startIdx);
+			return -1;
+		}
 	}
 	setDemodBuf(DemodBuffer, size, (size_t)startIdx);
+	setClockGrid(g_DemodClock, g_DemodStartIdx + (startIdx*g_DemodClock));
 	if (invert)
 		if (g_debugMode)
 			PrintAndLog("Had to invert bits");
@@ -73,8 +81,7 @@ int CmdIndalaDecode(const char *Cmd) {
 }
 
 int CmdIndalaRead(const char *Cmd) {
-	CmdLFRead("s");
-	getSamples("30000",false);
+	lf_read(true, 30000);
 	return CmdIndalaDecode("");
 }
 
@@ -95,8 +102,12 @@ int CmdIndalaDemod(const char *Cmd) {
 	uint8_t rawbits[4096];
 	int rawbit = 0;
 	int worst = 0, worstPos = 0;
-	// PrintAndLog("Expecting a bit less than %d raw bits", GraphTraceLen / 32);
+
+	//clear clock grid and demod plot
+	setClockGrid(0, 0);
+	DemodBufferLen = 0;
 	
+	// PrintAndLog("Expecting a bit less than %d raw bits", GraphTraceLen / 32);
 	// loop through raw signal - since we know it is psk1 rf/32 fc/2 skip every other value (+=2)
 	for (i = 0; i < GraphTraceLen-1; i += 2) {
 		count += 1;

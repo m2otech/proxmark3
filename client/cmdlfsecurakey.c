@@ -5,7 +5,7 @@
 // the license.
 //-----------------------------------------------------------------------------
 // Low frequency Securakey tag commands
-// ASK/Manchester, RF/40, 96 bits long
+// ASK/Manchester, RF/40, 96 bits long (unknown cs)
 //-----------------------------------------------------------------------------
 #include "cmdlfsecurakey.h"
 #include <string.h>
@@ -44,7 +44,7 @@ int CmdSecurakeyDemod(const char *Cmd) {
 	//ASK / Manchester
 	bool st = false;
 	if (!ASKDemod_ext("40 0 0", false, false, 1, &st)) {
-		if (g_debugMode) PrintAndLog("DEBUG: Error - Noralsy: ASK/Manchester Demod failed");
+		if (g_debugMode) PrintAndLog("DEBUG: Error - Securakey: ASK/Manchester Demod failed");
 		return 0;
 	}
 	if (st) return 0;
@@ -64,7 +64,7 @@ int CmdSecurakeyDemod(const char *Cmd) {
 		return 0;
 	}
 	setDemodBuf(DemodBuffer, 96, ans);
-	//setGrid_Clock(40);
+	setClockGrid(g_DemodClock, g_DemodStartIdx + (ans*g_DemodClock));
 
 	//got a good demod
 	uint32_t raw1 = bytebits_to_byte(DemodBuffer   , 32);
@@ -123,8 +123,7 @@ int CmdSecurakeyDemod(const char *Cmd) {
 }
 
 int CmdSecurakeyRead(const char *Cmd) {
-	CmdLFRead("s");
-	getSamples("8000",true);
+	lf_read(true, 8000);
 	return CmdSecurakeyDemod(Cmd);
 }
 

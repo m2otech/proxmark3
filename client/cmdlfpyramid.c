@@ -5,6 +5,7 @@
 // the license.
 //-----------------------------------------------------------------------------
 // Low frequency Farpoint / Pyramid tag commands
+// FSK2a, rf/50, 128 bits (complete)
 //-----------------------------------------------------------------------------
 #include <string.h>
 #include <inttypes.h>
@@ -95,8 +96,9 @@ int CmdFSKdemodPyramid(const char *Cmd)
 	size_t size = getFromGraphBuf(BitStream);
 	if (size==0) return 0;
 
+	int waveIdx=0;
 	//get binary from fsk wave
-	int idx = PyramiddemodFSK(BitStream, &size);
+	int idx = PyramiddemodFSK(BitStream, &size, &waveIdx);
 	if (idx < 0){
 		if (g_debugMode){
 			if (idx == -5)
@@ -151,6 +153,7 @@ int CmdFSKdemodPyramid(const char *Cmd)
 	uint32_t rawHi2 = bytebits_to_byte(BitStream+idx+32,32);
 	uint32_t rawHi3 = bytebits_to_byte(BitStream+idx,32);
 	setDemodBuf(BitStream,128,idx);
+	setClockGrid(50, waveIdx + (idx*50));
 
 	size = removeParity(BitStream, idx+8, 8, 1, 120);
 	if (size != 105){
@@ -225,8 +228,7 @@ int CmdFSKdemodPyramid(const char *Cmd)
 }
 
 int CmdPyramidRead(const char *Cmd) {
-	CmdLFRead("s");
-	getSamples("30000",false);
+	lf_read(true, 15000);
 	return CmdFSKdemodPyramid("");
 }
 

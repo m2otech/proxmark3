@@ -2,9 +2,55 @@
 All notable changes to this project will be documented in this file.
 This project uses the changelog in accordance with [keepchangelog](http://keepachangelog.com/). Please use this to write notable changes, which is not the same as git commit log...
 
+
 ## [unreleased][unreleased]
 
+### Changed
+- Improved backdoor detection missbehaving magic s50/1k tag (Fl0-0)
+- Deleted wipe functionality from `hf mf csetuid` (Merlok)
+- Changed `hf mf nested` logic (Merlok)
+- Added `hf mf nested` mode: autosearch keys for attack (from well known keys) (Merlok)
+- `hf mf nested` Check keys after they have found (Merlok)
+- `hf mf chk` Move main cycle to arm (Merlok)
+- Changed proxmark command line parameter `flush` to `-f` or `-flush` (Merlok)
+
+### Fixed
+- Changed start sequence in Qt mode (fix: short commands hangs main Qt thread) (Merlok)
+
 ### Added
+- Added PAC/Stanley detection to lf search (marshmellow)
+- Added lf pac demod and lf pac read - extracts the raw blocks from a PAC/Stanley tag (marshmellow)
+- Added hf mf c* commands compatibity for 4k and gen1b backdoor (Fl0-0)
+- Added backdoor detection for gen1b magic s70/4k tag (Fl0-0)
+- Added data fsktonrz, a fsk cleaning/demodulating routine for weak fsk signal. Note: follow this up with a `data rawdemod nr` to finish demoding your signal. (marshmellow)
+- Added lf em 410xbrute, LF EM410x reader bruteforce attack by simulating UIDs from a file (Fl0-0)
+- Added `hf mf cwipe` command. It wipes "magic Chinese" card. For 1a generation it uses card's "wipe" command. For gen1a and gen1b it uses a write command. (Merlok)
+- Added to `hf mf nested` source key check before attack (Merlok)
+- Added to `hf mf nested` after attack it checks all found keys on non-open sectors (Merlok)
+- `hf mf chk` Added setings to set iso14443a operations timeout. default timeout set to 500us (Merlok)
+- Added to `hf mf nested` parameters `s` and `ss` for checking slow cards (Merlok)
+- Added to proxmark command line parameters `w` - wait 20s for serial port (Merlok)
+- Added to proxmark command line parameters `c` and `l` - execute command and lua script from command line (Merlok)
+- Added to proxmark ability to execute commands from stdin (pipe) (Merlok)
+
+## [3.0.1][2017-06-08]
+
+### Fixed
+- Compiles on OS X
+- Compiles with gcc 4.9
+- Compiles for non-Intel CPUs
+
+
+## [3.0.0][2017-06-05]
+
+### Added
+- Added lf hitag write 24, the command writes a block to hitag2 tags in crypto mode (henjo)
+
+### Added
+- Added hf mf hardnested, an attack working for hardened Mifare cards (EV1, Mifare Plus SL1) where hf mf nested fails
+- Added experimental testmode write option for t55xx (danger) (marshmellow)
+- Added t55xx p1detect to `lf search` chip detections (marshmellow)
+- Added lf t55xx p1detect, detect page 1 of a t55xx tag based on E015 mfg code (marshmellow)
 - Added lf noralsy demod, read, clone, sim commands (iceman)
 - Added lf jablotron demod, read, clone, sim commands (iceman)
 - Added lf nexwatch read   - reads a nexwatch tag from the antenna
@@ -54,6 +100,12 @@ This project uses the changelog in accordance with [keepchangelog](http://keepac
 - Added option c to 'hf list' (mark CRC bytes) (piwi)
 
 ### Changed
+- Adjusted the lf demods to auto align and set the grid for the graph plot. 
+- `lf snoop` now automatically gets samples from the device
+- `lf read` now accepts [#samples] as arg. && now automatically gets samples from the device
+- adjusted lf t5 chip timings to use WaitUS. and adjusted the readblock timings
+    appears to have more consistent results with more antennas.
+- `lf t5 wakeup` has been adjusted to not need the p in front of the pwd arg.
 - `data psknexwatchdemod` has been moved to `lf nexwatch demod` (reads from graphbuffer)
 - `data fskparadoxdemod` has been moved to `lf paradox demod` (reads from graphbuffer)
 - `data fdxdemod` has been moved to `lf fdx demod` (reads from graphbuffer)

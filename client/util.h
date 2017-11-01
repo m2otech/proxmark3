@@ -51,6 +51,7 @@ extern uint32_t SwapBits(uint32_t value, int nrbits);
 extern uint8_t *SwapEndian64(const uint8_t *src, const size_t len, const uint8_t blockSize);
 extern void SwapEndian64ex(const uint8_t *src, const size_t len, const uint8_t blockSize, uint8_t *dest);
 
+extern int param_getlength(const char *line, int paramnum);
 extern char param_getchar(const char *line, int paramnum);
 extern int param_getptr(const char *line, int *bg, int *en, int paramnum);
 extern uint8_t param_get8(const char *line, int paramnum);
@@ -76,16 +77,10 @@ extern uint32_t le32toh (uint8_t *data);
 extern void rol(uint8_t *data, const size_t len);
 
 extern void clean_ascii(unsigned char *buf, size_t len);
+void strcleanrn(char *buf, size_t len);
+void strcreplace(char *buf, size_t len, char from, char to);
+char *strmcopy(char *buf);
 
-// timer functions/macros
-#ifdef _WIN32
-# include <windows.h>
-# define sleep(n) Sleep(1000 *(n))
-# define msleep(n) Sleep((n))
-#else
-extern void msleep(uint32_t n);		// sleep n milliseconds
-#endif // _WIN32
-
-extern uint64_t msclock(); 			// a milliseconds clock
+extern int num_CPUs(void);			// number of logical CPUs
 
 #endif // UTIL_H__

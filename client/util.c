@@ -8,10 +8,6 @@
 // utilities
 //-----------------------------------------------------------------------------
 
-#if !defined(_WIN32)
-#define _POSIX_C_SOURCE	199309L			// need nanosleep()
-#endif
-
 #include "util.h"
 
 #include <stdint.h>
@@ -21,6 +17,10 @@
 #include <stdio.h>
 #include <time.h>
 #include "data.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #define MAX_BIN_BREAK_LENGTH   (3072+384+1)
 
@@ -169,12 +169,12 @@ char *sprint_bin_break(const uint8_t *data, const size_t len, const uint8_t brea
 
 	size_t in_index = 0;
 	// loop through the out_index to make sure we don't go too far
-	for (size_t out_index=0; out_index < max_len-1; out_index++) {
+	for (size_t out_index=0; out_index < max_len; out_index++) {
 		// set character - (should be binary but verify it isn't more than 1 digit)
 		if (data[in_index]<10)
 			sprintf(tmp++, "%u", (unsigned int) data[in_index]);
 		// check if a line break is needed and we have room to print it in our array
-		if ( (breaks > 0) && !((in_index+1) % breaks) && (out_index+1 != max_len) ) {
+		if ( (breaks > 0) && !((in_index+1) % breaks) && (out_index+1 < max_len) ) {
 			// increment and print line break
 			out_index++;
 			sprintf(tmp++, "%s","\n");
@@ -193,13 +193,14 @@ char *sprint_hex_ascii(const uint8_t *data, const size_t len) {
 	static char buf[1024];
 	char *tmp = buf;
 	memset(buf, 0x00, 1024);
-	size_t max_len = (len > 1010) ? 1010 : len;
-
+	size_t max_len = (len > 255) ? 255 : len;
+	// max 255 bytes * 3 + 2 characters = 767 in buffer
 	sprintf(tmp, "%s| ", sprint_hex(data, max_len) );
 	
 	size_t i = 0;
 	size_t pos = (max_len * 3)+2;
-	while(i < max_len){
+	// add another 255 characters ascii = 1020 characters of buffer used
+	while(i < max_len) {
 		char c = data[i];
 		if ( (c < 32) || (c == 127))
 			c = '.';
@@ -321,7 +322,7 @@ char * printBits(size_t const size, void const * const ptr)
 
 //  -------------------------------------------------------------------------
 //  line     - param line
-//  bg, en   - symbol numbers in param line of beginning an ending parameter
+//  bg, en   - symbol numbers in param line of beginning and ending parameter
 //  paramnum - param number (from 0)
 //  -------------------------------------------------------------------------
 int param_getptr(const char *line, int *bg, int *en, int paramnum)
@@ -353,6 +354,15 @@ int param_getptr(const char *line, int *bg, int *en, int paramnum)
 	return 0;
 }
 
+
+int param_getlength(const char *line, int paramnum)
+{
+	int bg, en;
+	
+	if (param_getptr(line, &bg, &en, paramnum)) return 0;
+
+	return en - bg + 1;
+}
 
 char param_getchar(const char *line, int paramnum)
 {
@@ -613,46 +623,43 @@ void clean_ascii(unsigned char *buf, size_t len) {
   }
 }
 
-
-// Timer functions
-#if !defined (_WIN32)
-#include <errno.h>
-
-static void nsleep(uint64_t n) {
-  struct timespec timeout;
-  timeout.tv_sec = n/1000000000;
-  timeout.tv_nsec = n%1000000000;
-  while (nanosleep(&timeout, &timeout) && errno == EINTR);
+// replace \r \n to \0
+void strcleanrn(char *buf, size_t len) {
+	strcreplace(buf, len, '\n', '\0');
+	strcreplace(buf, len, '\r', '\0');
 }
 
-void msleep(uint32_t n) {
-	nsleep(1000000 * n);
+// replace char in buffer
+void strcreplace(char *buf, size_t len, char from, char to) {
+  for (size_t i = 0; i < len; i++) {
+    if (buf[i] == from)
+      buf[i] = to;
+  }
 }
 
-#endif // _WIN32
+char *strmcopy(char *buf) {
+	char * str = NULL;
+	if ((str = (char*) malloc(strlen(buf) + 1)) != NULL) {
+		memset(str, 0, strlen(buf) + 1);
+		strcpy(str, buf);
+	}	
+	return str;
+}
 
-// a milliseconds timer for performance measurement
-uint64_t msclock() {
+
+// determine number of logical CPU cores (use for multithreaded functions)
+extern int num_CPUs(void)
+{
 #if defined(_WIN32)
-    #include <sys/types.h>
-    
-    // WORKAROUND FOR MinGW (some versions - use if normal code does not compile)
-    // It has no _ftime_s and needs explicit inclusion of timeb.h
-    #include <sys/timeb.h>
-    struct _timeb t;
-    _ftime(&t);
-    return 1000 * t.time + t.millitm;
-    
-    // NORMAL CODE (use _ftime_s)
-	//struct _timeb t;
-    //if (_ftime_s(&t)) {
-	//	return 0;
-	//} else {
-	//	return 1000 * t.time + t.millitm;
-	//}
+	#include <sysinfoapi.h>
+	SYSTEM_INFO sysinfo;
+	GetSystemInfo(&sysinfo);
+	return sysinfo.dwNumberOfProcessors;
+#elif defined(__linux__) || defined(__APPLE__)
+	#include <unistd.h>
+	return sysconf(_SC_NPROCESSORS_ONLN);
 #else
-	struct timespec t;
-	clock_gettime(CLOCK_MONOTONIC, &t);
-	return (t.tv_sec * 1000 + t.tv_nsec / 1000000);
+	return 1;
 #endif
 }
+

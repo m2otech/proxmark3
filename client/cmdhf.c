@@ -546,7 +546,7 @@ uint16_t printTraceLine(uint16_t tracepos, uint16_t traceLen, uint8_t *trace, ui
 	
 	if (showWaitCycles && !isResponse && next_record_is_response(tracepos, trace)) {
 		uint32_t next_timestamp = *((uint32_t *)(trace + tracepos));
-		PrintAndLog(" %9d | %9d | %s | fdt (Frame Delay Time): %d",
+		PrintAndLog(" %10d | %10d | %s | fdt (Frame Delay Time): %d",
 			(EndOfTransmissionTimestamp - first_timestamp),
 			(next_timestamp - first_timestamp),
 			"   ",
@@ -663,7 +663,7 @@ int CmdHFList(const char *Cmd)
 int CmdHFSearch(const char *Cmd){
 	int ans = 0;
 	PrintAndLog("");
-	ans = CmdHF14AReader("s");
+	ans = CmdHF14AInfo("s");
 	if (ans > 0) {
 		PrintAndLog("\nValid ISO14443A Tag Found - Quiting Search\n");
 		return ans;
@@ -673,14 +673,15 @@ int CmdHFSearch(const char *Cmd){
 		PrintAndLog("\nValid iClass Tag (or PicoPass Tag) Found - Quiting Search\n");
 		return ans;
 	}
-	ans = HF14BInfo(false);
-	if (ans) {
-		PrintAndLog("\nValid ISO14443B Tag Found - Quiting Search\n");
-		return ans;
-	}
 	ans = HF15Reader("", false);
 	if (ans) {
 		PrintAndLog("\nValid ISO15693 Tag Found - Quiting Search\n");
+		return ans;
+	}
+	//14b is longest test currently (and rarest chip type) ... put last
+	ans = HF14BInfo(false);
+	if (ans) {
+		PrintAndLog("\nValid ISO14443B Tag Found - Quiting Search\n");
 		return ans;
 	}
 	PrintAndLog("\nno known/supported 13.56 MHz tags found\n");

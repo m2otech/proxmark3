@@ -5,6 +5,7 @@
 // the license.
 //-----------------------------------------------------------------------------
 // Low frequency fdx-b tag commands
+// Differential Biphase, rf/32, 128 bits (known)
 //-----------------------------------------------------------------------------
 
 #include "cmdlffdx.h"
@@ -46,7 +47,7 @@ static int CmdHelp(const char *Cmd);
 
 int usage_lf_fdx_clone(void){
 	PrintAndLog("Clone a FDX-B animal tag to a T55x7 tag.");
-	PrintAndLog("Usage: lf animal clone [h] <country id> <animal id> <Q5>");
+	PrintAndLog("Usage: lf fdx clone [h] <country id> <animal id> <Q5>");
 	PrintAndLog("Options:");
 	PrintAndLog("      h            : This help");
 	PrintAndLog("      <country id> : Country id");
@@ -57,7 +58,7 @@ int usage_lf_fdx_clone(void){
 	// extended data
 	PrintAndLog("      <Q5>        : Specify write to Q5 (t5555 instead of t55x7)");
 	PrintAndLog("");
-	PrintAndLog("Sample: lf animal clone 999 112233");
+	PrintAndLog("Sample: lf fdx clone 999 112233");
 	return 0;
 }
 
@@ -65,13 +66,13 @@ int usage_lf_fdx_sim(void) {
 	PrintAndLog("Enables simulation of FDX-B animal tag");
 	PrintAndLog("Simulation runs until the button is pressed or another USB command is issued.");
 	PrintAndLog("");
-	PrintAndLog("Usage:  lf animal sim [h] <country id> <animal id>");
+	PrintAndLog("Usage:  lf fdx sim [h] <country id> <animal id>");
 	PrintAndLog("Options:");
 	PrintAndLog("      h            : This help");
 	PrintAndLog("      <country id> : Country ID");
 	PrintAndLog("      <animal id>  : Animal ID");
 	PrintAndLog("");
-	PrintAndLog("Sample: lf animal sim 999 112233");
+	PrintAndLog("Sample: lf fdx sim 999 112233");
 	return 0;
 }
 // clearing the topbit needed for the preambl detection. 
@@ -158,6 +159,8 @@ int CmdFdxDemod(const char *Cmd){
 
 	// set and leave DemodBuffer intact
 	setDemodBuf(DemodBuffer, 128, preambleIndex);
+	setClockGrid(g_DemodClock, g_DemodStartIdx + (preambleIndex*g_DemodClock));
+
 	uint8_t bits_no_spacer[117];
 	memcpy(bits_no_spacer, DemodBuffer + 11, 117);
 
@@ -203,8 +206,7 @@ int CmdFdxDemod(const char *Cmd){
 }
 
 int CmdFdxRead(const char *Cmd) {
-	CmdLFRead("s");
-	getSamples("10000", true);
+	lf_read(true, 10000);
 	return CmdFdxDemod(Cmd);
 }
 
